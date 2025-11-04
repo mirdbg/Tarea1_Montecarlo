@@ -1,1 +1,12 @@
-*.env
+echo "__pycache__/
+.ipynb_checkpoints/
+*.pyc
+.env
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+.DS_Store
+" > .gitignore
