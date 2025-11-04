@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import Optional
 import numpy as np
@@ -21,7 +20,7 @@ class MonteCarloSimulation:
               y .symbol (identificador del activo).
       - symbol: si no se proporciona, se toma de data.symbol.
     """
-    data: PriceSeries = field(default_factory=PriceSeries)
+    price_series: PriceSeries = field(default_factory=PriceSeries)
     symbol: Optional[str] = None
     _last_sim: np.ndarray | None = None  # Almacena la última simulación realizada
 
@@ -36,12 +35,12 @@ class MonteCarloSimulation:
         # 0) Resolver símbolo por defecto desde la PriceSeries
         if self.symbol is None:
             # si la PriceSeries tiene symbol, úsalo; si no, pon "DESCONOCIDO"
-            self.symbol = getattr(self.data, "symbol", "DESCONOCIDO") or "DESCONOCIDO"
+            self.symbol = getattr(self.price_series, "symbol", "DESCONOCIDO") or "DESCONOCIDO"
 
         # 1) Obtener el DataFrame interno
-        df = getattr(self.data, "data", None)
+        df = getattr(self.price_series, "data", None)
         if df is None or not isinstance(df, pd.DataFrame):
-            raise ValueError("❌ 'data' debe ser una PriceSeries con un atributo .data (DataFrame).")
+            raise ValueError("❌ 'price_series' debe ser una PriceSeries con un atributo .data (DataFrame).")
 
         # 2) Validaciones básicas del DataFrame
         if df.empty:
@@ -54,15 +53,15 @@ class MonteCarloSimulation:
             raise ValueError("❌ Todos los valores de 'price' son NaN.")
 
         # 3) Orden temporal asegurada (y re-asignación normalizada)
-        self.data.data = df.sort_index()
+        self.price_series.data = df.sort_index()
 
     # ---------- Cálculo de retornos ----------
     def _log_returns(self) -> pd.Series:
         """
         Calcula los retornos logarítmicos diarios a partir de la columna 'price'
-        de la PriceSeries interna (self.data.data). Devuelve una Serie sin NaN.
+        de la PriceSeries interna (self.price_series.data). Devuelve una Serie sin NaN.
         """
-        return np.log(self.data.data["price"]).diff().dropna()
+        return np.log(self.price_series.data["price"]).diff().dropna()
 
     # ---------- Simulación Monte Carlo ----------
     def monte_carlo(
@@ -80,7 +79,7 @@ class MonteCarloSimulation:
             np.ndarray con forma (days+1, n_sims) con los precios simulados.
         """
         # 1) Precio inicial = último precio real o el proporcionado
-        price0 = float(self.data.data["price"].iloc[-1]) if start_price is None else float(start_price)
+        price0 = float(self.price_series.data["price"].iloc[-1]) if start_price is None else float(start_price)
 
         # 2) Retornos logarítmicos históricos
         r = self._log_returns()
@@ -145,119 +144,30 @@ class MonteCarloSimulation:
         return {"prices": prices, "finals": finals, "summary": summary}
 
         # ---------- Gráficas ----------
-    def plot_history(
-        self,
-        include_sims: bool = True,
-        max_paths: int = 50,
-        path: Optional[str] = None,
-    ):
-        """
-        Grafica el histórico (self.data) y, si hay simulación en self._last_sim,
-        sobrepone las trayectorias de Monte Carlo partiendo de la última fecha histórica.
-        """
-        df = self.data.data  # DataFrame con la columna 'price'
-        if df.empty:
-            raise ValueError("No hay datos históricos para graficar.")
-
-        # Figura
+    def plot_history(self, path: Optional[str] = None):
+        if self.price_series.data.empty:
+            return
         plt.figure()
-
-        # 1) Histórico
-        plt.plot(df.index, df["price"], label="Histórico", linewidth=2)
-
-        # 2) Simulaciones (si existen y se pide)
-        if include_sims and (self._last_sim is not None):
-            sims = self._last_sim  # shape: (days+1, n_sims)
-            if sims.ndim != 2:
-                raise ValueError("Simulación inválida almacenada en self._last_sim.")
-
-            # Fechas futuras: mismo punto inicial (día 0 = última fecha histórica),
-            # y luego días hábiles hacia adelante para las filas 1..days
-            last_dt = df.index[-1]
-            days = sims.shape[0] - 1
-            future_idx = pd.bdate_range(last_dt, periods=days + 1)  # incluye last_dt como 1º
-            # Aseguramos longitud = rows de sims
-            if len(future_idx) != sims.shape[0]:
-                # fallback por si el calendario difiere
-                future_idx = pd.date_range(last_dt, periods=sims.shape[0], freq="B")
-
-            # Pintamos hasta max_paths caminos
-            k = min(max_paths, sims.shape[1])
-            for i in range(k):
-                plt.plot(future_idx, sims[:, i], alpha=0.25)
-
-            plt.legend(loc="best")
-
-        plt.title(f"Evolución histórica y simulaciones - {self.symbol}")
-        plt.xlabel("Fecha")
-        plt.ylabel("Precio")
-
-        if path is not None:
+        self.price_series.data["price"].plot(title=f"Historical Price - {self.symbol}")
+        if path:
             plt.savefig(path, bbox_inches="tight")
             plt.close()
-        else:
-            plt.show()
 
-
-    def plot_simulations(
-        self,
-        prices: Optional[np.ndarray] = None,
-        max_paths: int = 50,
-        path: Optional[str] = None,
-    ):
-        """
-        Grafica trayectorias simuladas. Si no se pasa `prices`,
-        usa la última simulación cacheada en `self._last_sim`.
-        """
-        sims = prices if prices is not None else self._last_sim
-        if sims is None:
-            raise ValueError("No hay simulaciones disponibles. Ejecuta monte_carlo() primero.")
-        if sims.ndim != 2:
-            raise ValueError("Se esperaba un array 2D (days+1, n_sims).")
-
-        # Fechado relativo (0..days) o por fechas hábiles desde la última fecha histórica
-        last_dt = self.data.data.index[-1]
-        days = sims.shape[0] - 1
-        future_idx = pd.bdate_range(last_dt, periods=days + 1)
-
+    def plot_simulations(self, prices: np.ndarray, max_paths: int = 50, path: Optional[str] = None):
+        k = min(max_paths, prices.shape[1])
         plt.figure()
-        k = min(max_paths, sims.shape[1])
         for i in range(k):
-            plt.plot(future_idx, sims[:, i], alpha=0.25)
-        plt.title(f"Simulaciones Monte Carlo - {self.symbol}")
-        plt.xlabel("Fecha")
-        plt.ylabel("Precio")
-
-        if path is not None:
+            plt.plot(prices[:, i])
+        plt.title(f"Monte Carlo Simulations - {self.symbol}")
+        if path:
             plt.savefig(path, bbox_inches="tight")
             plt.close()
-        else:
-            plt.show()
 
-
-    def plot_final_hist(
-        self,
-        finals: Optional[np.ndarray] = None,
-        bins: int = 50,
-        path: Optional[str] = None,
-    ):
-        """
-        Histograma de precios finales simulados. Si no se pasa `finals`,
-        usa la última simulación cacheada.
-        """
-        if finals is None:
-            if self._last_sim is None:
-                raise ValueError("No hay simulaciones disponibles. Ejecuta monte_carlo() primero.")
-            finals = self._last_sim[-1, :]
-
+    def plot_final_hist(self, prices: np.ndarray, bins: int = 50, path: Optional[str] = None):
+        finals= self.final_values(prices)
         plt.figure()
         plt.hist(finals, bins=bins)
-        plt.title(f"Distribución de valor final - {self.symbol}")
-        plt.xlabel("Precio final")
-        plt.ylabel("Frecuencia")
-
-        if path is not None:
+        plt.title(f"Terminal Value Distribution - {self.symbol}")
+        if path:
             plt.savefig(path, bbox_inches="tight")
             plt.close()
-        else:
-            plt.show()
